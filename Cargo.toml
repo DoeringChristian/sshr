@@ -1,0 +1,17 @@
+[package]
+name = "sshr"
+version = "0.1.0"
+edition = "2021"
+description = "Resilient SSH sessions with automatic reconnection"
+license = "MIT"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+anyhow = "1"
+owo-colors = "4"
+base64 = "0.22"
+
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1

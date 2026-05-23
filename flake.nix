@@ -14,32 +14,31 @@
     flake-utils.lib.eachDefaultSystem (system: let
       pkgs = import nixpkgs {inherit system;};
     in {
-      packages.default = pkgs.stdenvNoCC.mkDerivation {
+      packages.default = pkgs.rustPlatform.buildRustPackage {
         pname = "sshr";
         version = "0.1.0";
         src = ./.;
+        cargoLock.lockFile = ./Cargo.lock;
 
-        installPhase = ''
-          mkdir -p $out/bin $out/share/sshr/{kitty,shpool}
-
-          cp bin/sshr $out/bin/sshr
-          chmod +x $out/bin/sshr
-
+        postInstall = ''
+          mkdir -p $out/share/sshr/{kitty,shpool}
           cp kitty/*.py $out/share/sshr/kitty/
           cp shpool/build.sh $out/share/sshr/shpool/
-
-          # Copy pre-built shpool binaries if present
           if [ -d shpool/bin ]; then
             cp -r shpool/bin $out/share/sshr/shpool/
           fi
         '';
 
         meta = with pkgs.lib; {
-          description = "Resilient SSH sessions with automatic reconnection and persistent shells";
+          description = "Resilient SSH sessions with automatic reconnection";
           license = licenses.mit;
           platforms = platforms.unix;
           mainProgram = "sshr";
         };
+      };
+
+      devShells.default = pkgs.mkShell {
+        buildInputs = with pkgs; [cargo rustc rust-analyzer clippy rustfmt];
       };
     });
 }
