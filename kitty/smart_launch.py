@@ -31,10 +31,10 @@ def handle_result(args, answer, target_window_id, boss):
         remote_cwd = ""
         osc7_url = window.screen.last_reported_cwd
         if osc7_url:
-            remote_cwd = str(urlparse(osc7_url).path)
+            url = osc7_url.decode() if isinstance(osc7_url, bytes) else osc7_url
+            remote_cwd = urlparse(url).path
 
-        cmd = ["sshr", "--remote-cwd", remote_cwd, str(sshr_host)] if remote_cwd else ["sshr", str(sshr_host)]
-        boss.show_error("sshr debug", f"osc7_url={osc7_url!r}\nremote_cwd={remote_cwd!r}\ncmd={cmd!r}")
+        cmd = ["sshr", "--remote-cwd", remote_cwd, sshr_host] if remote_cwd else ["sshr", sshr_host]
         tab.new_window(cmd=cmd)
     else:
         cwd = window.cwd_of_child
