@@ -3,7 +3,7 @@ use crate::probe::SessionTool;
 const FISH_INIT: &str = "\
 set -gx SSH_CONNECTION 1; \
 function __sshr_osc7 --on-event fish_prompt; \
-printf '\\e]7;file://%s%s\\a' (hostname) $PWD; \
+printf \\e]7\\;file://%s%s\\a (hostname) $PWD; \
 end";
 
 /// Build the remote command string to execute via SSH.
