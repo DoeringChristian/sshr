@@ -1,14 +1,10 @@
 use crate::probe::SessionTool;
 
-/// Fish init commands passed via `fish -C`.
-/// Sets SSH_CONNECTION and installs a PWD watcher that reports cwd
-/// to the terminal via iTerm2/kitty SetUserVar (base64-encoded).
 const FISH_INIT: &str = "\
 set -gx SSH_CONNECTION 1; \
-function __sshr_cwd --on-variable PWD; \
-printf '\\e]1337;SetUserVar=%s=%s\\a' sshr_cwd (printf %s $PWD | base64); \
-end; \
-__sshr_cwd";
+function __sshr_osc7 --on-event fish_prompt; \
+printf '\\e]7;file://%s%s\\a' (hostname) $PWD; \
+end";
 
 /// Build the remote command string to execute via SSH.
 ///
@@ -89,7 +85,7 @@ mod tests {
         assert!(cmd.contains("shpool attach s0"));
         assert!(cmd.contains("-c '/home/u/.nix-profile/bin/fish"));
         assert!(cmd.contains("SSH_CONNECTION"));
-        assert!(cmd.contains("__sshr_cwd"));
+        assert!(cmd.contains("__sshr_osc7"));
         assert!(cmd.contains("-d ~/projects"));
     }
 
@@ -133,6 +129,6 @@ mod tests {
         let cmd = build_remote_cmd(&SessionTool::None, "", Some("/usr/bin/fish"), None);
         let cmd = cmd.unwrap();
         assert!(cmd.starts_with("/usr/bin/fish -C"));
-        assert!(cmd.contains("__sshr_cwd"));
+        assert!(cmd.contains("__sshr_osc7"));
     }
 }
