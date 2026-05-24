@@ -33,11 +33,7 @@ def handle_result(args, answer, target_window_id, boss):
         if osc7_url:
             remote_cwd = urlparse(osc7_url).path
 
-        cmd = ["sshr"]
-        if remote_cwd:
-            cmd.extend(["--remote-cwd", remote_cwd])
-        cmd.append(sshr_host)
-
+        cmd = ["sshr", "--remote-cwd", str(remote_cwd), str(sshr_host)] if remote_cwd else ["sshr", str(sshr_host)]
         tab.new_window(cmd=cmd)
     else:
         cwd = window.cwd_of_child
