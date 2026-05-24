@@ -25,7 +25,7 @@ def handle_result(args, answer, target_window_id, boss):
     sshr_host = window.user_vars.get("sshr_host", "")
 
     if sshr_host:
-        remote_cwd = window.reported_cwd or ""
+        remote_cwd = window.cwd_of_child or ""
 
         cmd = ["sshr"]
         if remote_cwd:
