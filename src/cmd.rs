@@ -17,7 +17,7 @@ pub fn build_remote_cmd(
 ) -> Option<String> {
     match tool {
         SessionTool::Shpool { path } => {
-            let mut cmd = format!("{path} attach {session}");
+            let mut cmd = format!("{path} attach -f {session}");
             if let Some(shell) = shell_path {
                 cmd.push_str(&format!(
                     " -c '{shell} -C \"{FISH_INIT}\"'"
@@ -82,7 +82,7 @@ mod tests {
             Some("~/projects"),
         );
         let cmd = cmd.unwrap();
-        assert!(cmd.contains("shpool attach s0"));
+        assert!(cmd.contains("shpool attach -f s0"));
         assert!(cmd.contains("-c '/home/u/.nix-profile/bin/fish"));
         assert!(cmd.contains("SSH_CONNECTION"));
         assert!(cmd.contains("__sshr_osc7"));
@@ -99,7 +99,7 @@ mod tests {
             None,
             None,
         );
-        assert_eq!(cmd.unwrap(), "/usr/bin/shpool attach s1");
+        assert_eq!(cmd.unwrap(), "/usr/bin/shpool attach -f s1");
     }
 
     #[test]
