@@ -5,6 +5,9 @@ window to the same host in the same working directory. Otherwise falls
 back to launching a local window with cwd=current.
 """
 
+from urllib.parse import urlparse
+
+
 def main(args):
     pass
 
@@ -25,7 +28,10 @@ def handle_result(args, answer, target_window_id, boss):
     sshr_host = window.user_vars.get("sshr_host", "")
 
     if sshr_host:
-        remote_cwd = window.cwd_of_child or ""
+        remote_cwd = ""
+        osc7_url = window.screen.last_reported_cwd
+        if osc7_url:
+            remote_cwd = urlparse(osc7_url).path
 
         cmd = ["sshr"]
         if remote_cwd:
