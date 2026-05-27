@@ -18,7 +18,7 @@
         pname = "sshr";
         version = "0.1.0";
         src = ./.;
-        cargoLock.lockFile = ./Cargo.lock;
+        cargoHash = "sha256-n9+sE1qHQPXXmmwwokFDpNnLsDJQ6enl9psxe+7ALfs=";
 
         postInstall = ''
           mkdir -p $out/share/sshr/{kitty,shpool}
