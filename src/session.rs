@@ -6,6 +6,14 @@ use std::io::{self, Write};
 use crate::probe::SessionTool;
 use crate::ssh::SshContext;
 
+pub fn local_prefix() -> String {
+    let full = hostname::get()
+        .map(|h| h.to_string_lossy().to_string())
+        .unwrap_or_else(|_| "unknown".into());
+    let short = full.split('.').next().unwrap_or(&full);
+    short.to_lowercase().replace(' ', "-")
+}
+
 #[derive(Debug, Clone)]
 pub struct SessionEntry {
     pub name: String,
@@ -48,11 +56,12 @@ pub fn new_session_name(
     tool: &SessionTool,
     extra_args: &[String],
 ) -> Result<String> {
+    let prefix = local_prefix();
     let sessions = list_sessions(ssh, host, tool, extra_args)?;
     let existing: HashSet<&str> = sessions.iter().map(|s| s.name.as_str()).collect();
     let mut i = 0;
     loop {
-        let name = format!("s{i}");
+        let name = format!("{prefix}-s{i}");
         if !existing.contains(name.as_str()) {
             return Ok(name);
         }
@@ -66,7 +75,11 @@ pub fn pick_session_interactive(
     tool: &SessionTool,
     extra_args: &[String],
 ) -> Result<String> {
-    let sessions = list_sessions(ssh, host, tool, extra_args)?;
+    let prefix = local_prefix();
+    let sessions: Vec<_> = list_sessions(ssh, host, tool, extra_args)?
+        .into_iter()
+        .filter(|s| s.name.starts_with(&format!("{prefix}-")))
+        .collect();
     if sessions.is_empty() {
         bail!("no existing sessions on {}", host);
     }
@@ -109,11 +122,13 @@ pub fn kill_sessions(
     Ok(())
 }
 
-pub fn clean_detached(ssh: &SshContext, host: &str, tool: &SessionTool) -> Result<()> {
+pub fn clean_detached(ssh: &SshContext, host: &str, tool: &SessionTool, all: bool) -> Result<()> {
     let sessions = list_sessions(ssh, host, tool, &[])?;
+    let prefix = local_prefix();
     let detached: Vec<&str> = sessions
         .iter()
         .filter(|s| s.raw_line.contains("detached"))
+        .filter(|s| all || s.name.starts_with(&format!("{prefix}-")))
         .map(|s| s.name.as_str())
         .collect();
 

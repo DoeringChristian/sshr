@@ -10,7 +10,6 @@ use anyhow::{bail, Result};
 use clap::Parser;
 use owo_colors::OwoColorize;
 
-use probe::SessionTool;
 use ssh::SshContext;
 
 #[derive(Parser)]
@@ -20,9 +19,9 @@ use ssh::SshContext;
     about = "Resilient SSH sessions with automatic reconnection"
 )]
 struct Cli {
-    /// Attach to an existing session
+    /// Show/operate on sessions from all clients (not just this host)
     #[arg(short = 'a', long)]
-    attach: bool,
+    all: bool,
 
     /// Start in the given remote directory
     #[arg(long)]
@@ -58,7 +57,15 @@ fn run() -> Result<()> {
             if host.is_empty() {
                 bail!("usage: sshr list <host>");
             }
-            cmd_list(&host)
+            cmd_list(&host, cli.all)
+        }
+        "attach" => {
+            let host = cli.args.get(1).cloned().unwrap_or_default();
+            if host.is_empty() {
+                bail!("usage: sshr attach <host>");
+            }
+            let ssh_args: Vec<String> = cli.args[2..].to_vec();
+            cmd_connect(&host, &ssh_args, true, cli.remote_cwd, cli.shell, cli.force_upload)
         }
         "kill" => {
             let host = cli.args.get(1).cloned().unwrap_or_default();
@@ -66,41 +73,47 @@ fn run() -> Result<()> {
                 bail!("usage: sshr kill <host> [session...]");
             }
             let sessions: Vec<String> = cli.args[2..].to_vec();
-            cmd_kill(&host, &sessions)
+            cmd_kill(&host, &sessions, cli.all)
         }
         "clean" => {
             let host = cli.args.get(1).cloned().unwrap_or_default();
             if host.is_empty() {
                 bail!("usage: sshr clean <host>");
             }
-            cmd_clean(&host)
+            cmd_clean(&host, cli.all)
         }
         _ => {
             let host = first.clone();
             let ssh_args: Vec<String> = cli.args[1..].to_vec();
-            cmd_connect(&host, &ssh_args, cli.attach, cli.remote_cwd, cli.shell, cli.force_upload)
+            cmd_connect(&host, &ssh_args, false, cli.remote_cwd, cli.shell, cli.force_upload)
         }
     }
 }
 
-fn cmd_list(host: &str) -> Result<()> {
+fn cmd_list(host: &str, all: bool) -> Result<()> {
     let ssh = SshContext::new()?;
     let probe_result = probe::probe_remote(&ssh, host, &[])?;
     if probe_result.tool.is_none() {
         bail!("no session tool found on {host}");
     }
-    // Print full output including header
-    let cmd = match &probe_result.tool {
-        SessionTool::Shpool { path } => format!("{path} list 2>/dev/null"),
-        SessionTool::Abduco { path } => format!("{path} 2>&1"),
-        SessionTool::None => unreachable!(),
-    };
-    let output = ssh.run_capture(host, &[], &cmd)?;
-    print!("{output}");
+    let sessions = session::list_sessions(&ssh, host, &probe_result.tool, &[])?;
+    let prefix = session::local_prefix();
+    let filtered: Vec<&session::SessionEntry> = sessions
+        .iter()
+        .filter(|s| all || s.name.starts_with(&format!("{prefix}-")))
+        .collect();
+
+    if filtered.is_empty() {
+        eprintln!("No sessions.");
+    } else {
+        for entry in filtered {
+            println!("{}", entry.raw_line);
+        }
+    }
     Ok(())
 }
 
-fn cmd_kill(host: &str, sessions: &[String]) -> Result<()> {
+fn cmd_kill(host: &str, sessions: &[String], all: bool) -> Result<()> {
     let ssh = SshContext::new()?;
     let probe_result = probe::probe_remote(&ssh, host, &[])?;
     if probe_result.tool.is_none() {
@@ -108,8 +121,12 @@ fn cmd_kill(host: &str, sessions: &[String]) -> Result<()> {
     }
 
     let to_kill = if sessions.is_empty() {
-        // Interactive: list and ask
         let entries = session::list_sessions(&ssh, host, &probe_result.tool, &[])?;
+        let prefix = session::local_prefix();
+        let entries: Vec<_> = entries
+            .into_iter()
+            .filter(|s| all || s.name.starts_with(&format!("{prefix}-")))
+            .collect();
         if entries.is_empty() {
             eprintln!("No sessions on {host}.");
             return Ok(());
@@ -134,13 +151,13 @@ fn cmd_kill(host: &str, sessions: &[String]) -> Result<()> {
     session::kill_sessions(&ssh, host, &probe_result.tool, &to_kill)
 }
 
-fn cmd_clean(host: &str) -> Result<()> {
+fn cmd_clean(host: &str, all: bool) -> Result<()> {
     let ssh = SshContext::new()?;
     let probe_result = probe::probe_remote(&ssh, host, &[])?;
     if probe_result.tool.is_none() {
         bail!("no session tool found on {host}");
     }
-    session::clean_detached(&ssh, host, &probe_result.tool)
+    session::clean_detached(&ssh, host, &probe_result.tool, all)
 }
 
 fn cmd_connect(
