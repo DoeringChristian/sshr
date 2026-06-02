@@ -3,6 +3,8 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::{Command, ExitStatus, Stdio};
 
+use crate::vlog;
+
 pub struct SshContext {
     control_dir: PathBuf,
     control_path: String,
@@ -46,6 +48,7 @@ impl SshContext {
             cmd.arg("-t");
             cmd.arg(remote);
         }
+        vlog!("exec: {cmd:?}");
         cmd.stdin(Stdio::inherit())
             .stdout(Stdio::inherit())
             .stderr(Stdio::inherit());
@@ -59,11 +62,13 @@ impl SshContext {
         extra_args: &[String],
         remote_cmd: &str,
     ) -> Result<String> {
-        let output = Command::new("ssh")
-            .args(self.mux_args())
+        let mut cmd = Command::new("ssh");
+        cmd.args(self.mux_args())
             .arg(host)
             .args(extra_args)
-            .arg(remote_cmd)
+            .arg(remote_cmd);
+        vlog!("exec: {cmd:?}");
+        let output = cmd
             .stderr(Stdio::null())
             .output()
             .context("failed to execute ssh")?;
@@ -71,12 +76,21 @@ impl SshContext {
     }
 
     /// Upload a file via SCP using the same control socket.
-    pub fn scp_upload(&self, host: &str, local: &std::path::Path, remote: &str) -> Result<()> {
-        let status = Command::new("scp")
-            .arg("-o")
+    pub fn scp_upload(
+        &self,
+        host: &str,
+        extra_args: &[String],
+        local: &std::path::Path,
+        remote: &str,
+    ) -> Result<()> {
+        let mut cmd = Command::new("scp");
+        cmd.arg("-o")
             .arg(format!("ControlPath={}", self.control_path))
+            .args(translate_for_scp(extra_args))
             .arg(local)
-            .arg(format!("{host}:{remote}"))
+            .arg(format!("{host}:{remote}"));
+        vlog!("exec: {cmd:?}");
+        let status = cmd
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status()
@@ -84,6 +98,22 @@ impl SshContext {
         anyhow::ensure!(status.success(), "scp upload failed");
         Ok(())
     }
+}
+
+/// Translate ssh-style args to scp-style. scp uses `-P` (capital) for the
+/// port; lowercase `-p` would mean "preserve times" instead.
+fn translate_for_scp(args: &[String]) -> Vec<String> {
+    let mut out = Vec::with_capacity(args.len());
+    let mut i = 0;
+    while i < args.len() {
+        if args[i] == "-p" {
+            out.push("-P".into());
+        } else {
+            out.push(args[i].clone());
+        }
+        i += 1;
+    }
+    out
 }
 
 fn dirs() -> PathBuf {

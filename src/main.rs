@@ -5,6 +5,7 @@ mod reconnect;
 mod session;
 mod ssh;
 mod upload;
+mod verbose;
 
 use anyhow::{bail, Result};
 use clap::Parser;
@@ -35,6 +36,10 @@ struct Cli {
     #[arg(long)]
     force_upload: bool,
 
+    /// Verbose: log probe results, paths, and SSH commands
+    #[arg(short = 'v', long)]
+    verbose: bool,
+
     /// Subcommand or host, followed by optional SSH args
     #[arg(required = true, trailing_var_arg = true)]
     args: Vec<String>,
@@ -49,6 +54,7 @@ fn main() {
 
 fn run() -> Result<()> {
     let cli = Cli::parse();
+    verbose::set(cli.verbose);
     let first = &cli.args[0];
 
     match first.as_str() {
@@ -90,13 +96,15 @@ fn run() -> Result<()> {
     }
 }
 
+fn ensure_remote_shpool(ssh: &SshContext, host: &str, extra_args: &[String], force_upload: bool) -> Result<()> {
+    upload::ensure_shpool(ssh, host, extra_args, force_upload)
+}
+
 fn cmd_list(host: &str, all: bool) -> Result<()> {
     let ssh = SshContext::new()?;
-    let probe_result = probe::probe_remote(&ssh, host, &[])?;
-    if probe_result.tool.is_none() {
-        bail!("no session tool found on {host}");
-    }
-    let sessions = session::list_sessions(&ssh, host, &probe_result.tool, &[])?;
+    ensure_remote_shpool(&ssh, host, &[], false)?;
+
+    let sessions = session::list_sessions(&ssh, host, &[])?;
     let prefix = session::local_prefix();
     let filtered: Vec<&session::SessionEntry> = sessions
         .iter()
@@ -115,13 +123,10 @@ fn cmd_list(host: &str, all: bool) -> Result<()> {
 
 fn cmd_kill(host: &str, sessions: &[String], all: bool) -> Result<()> {
     let ssh = SshContext::new()?;
-    let probe_result = probe::probe_remote(&ssh, host, &[])?;
-    if probe_result.tool.is_none() {
-        bail!("no session tool found on {host}");
-    }
+    ensure_remote_shpool(&ssh, host, &[], false)?;
 
     let to_kill = if sessions.is_empty() {
-        let entries = session::list_sessions(&ssh, host, &probe_result.tool, &[])?;
+        let entries = session::list_sessions(&ssh, host, &[])?;
         let prefix = session::local_prefix();
         let entries: Vec<_> = entries
             .into_iter()
@@ -148,16 +153,13 @@ fn cmd_kill(host: &str, sessions: &[String], all: bool) -> Result<()> {
         sessions.to_vec()
     };
 
-    session::kill_sessions(&ssh, host, &probe_result.tool, &to_kill)
+    session::kill_sessions(&ssh, host, &to_kill)
 }
 
 fn cmd_clean(host: &str, all: bool) -> Result<()> {
     let ssh = SshContext::new()?;
-    let probe_result = probe::probe_remote(&ssh, host, &[])?;
-    if probe_result.tool.is_none() {
-        bail!("no session tool found on {host}");
-    }
-    session::clean_detached(&ssh, host, &probe_result.tool, all)
+    ensure_remote_shpool(&ssh, host, &[], false)?;
+    session::clean_detached(&ssh, host, all)
 }
 
 fn cmd_connect(
@@ -170,73 +172,38 @@ fn cmd_connect(
 ) -> Result<()> {
     let ssh = SshContext::new()?;
 
-    // Kitty: set host
     if kitty::is_kitty() {
         kitty::set_user_var("sshr_host", host);
     }
 
-    // Probe remote for shell
-    let probe_result = probe::probe_remote(&ssh, host, ssh_args)?;
+    let fish_path = probe::probe_remote(&ssh, host, ssh_args)?;
+    let shell_path = shell.or(fish_path);
 
-    // Resolve shell: explicit > fish > default
-    let shell_path = shell.or(probe_result.fish_path);
+    ensure_remote_shpool(&ssh, host, ssh_args, force_upload)?;
 
-    // Use probe result if available, otherwise upload shpool as fallback
-    let tool = if !probe_result.tool.is_none() && !force_upload {
-        probe_result.tool
+    let session_name = if attach {
+        session::pick_session_interactive(&ssh, host, ssh_args)?
     } else {
-        upload::ensure_shpool(&ssh, host, ssh_args, force_upload)?
-            .unwrap_or(probe_result.tool)
+        session::new_session_name(&ssh, host, ssh_args)?
     };
 
-    // Determine session name
-    let session_name = if tool.is_none() {
-        None
-    } else if attach {
-        Some(session::pick_session_interactive(
-            &ssh, host, &tool, ssh_args,
-        )?)
-    } else {
-        Some(session::new_session_name(&ssh, host, &tool, ssh_args)?)
-    };
-
-    // Kitty: set session + tool
     if kitty::is_kitty() {
-        if let Some(ref s) = session_name {
-            kitty::set_user_var("sshr_session", s);
-            kitty::set_user_var("sshr_tool", tool.path());
-        }
+        kitty::set_user_var("sshr_session", &session_name);
     }
 
-    // Build remote command
-    let remote_cmd = session_name.as_ref().and_then(|s| {
-        cmd::build_remote_cmd(&tool, s, shell_path.as_deref(), remote_cwd.as_deref())
-    });
+    let remote_cmd = cmd::build_shpool_cmd(
+        &session_name,
+        shell_path.as_deref(),
+        remote_cwd.as_deref(),
+    );
 
-    // If no session tool and no shell, remote_cmd might still be None from cmd module
-    // but we may have a shell-only or cwd-only command
-    let remote_cmd = remote_cmd.or_else(|| {
-        if tool.is_none() {
-            cmd::build_remote_cmd(&tool, "", shell_path.as_deref(), remote_cwd.as_deref())
-        } else {
-            None
-        }
-    });
+    eprintln!(
+        "Connecting to {} (session: {})...",
+        host.cyan().bold(),
+        session_name.green().bold()
+    );
 
-    // Status message
-    if let Some(ref s) = session_name {
-        eprintln!(
-            "Connecting to {} (using {}, session: {})...",
-            host.cyan().bold(),
-            tool.name().green(),
-            s.green().bold()
-        );
-    } else {
-        eprintln!("Connecting to {}...", host.cyan().bold());
-    }
-
-    // Connect with reconnection
     reconnect::run_with_reconnect(|| {
-        ssh.run_interactive(host, ssh_args, remote_cmd.as_deref())
+        ssh.run_interactive(host, ssh_args, Some(&remote_cmd))
     })
 }

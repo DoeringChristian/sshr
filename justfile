@@ -58,3 +58,58 @@ shpool-force:
 clean:
     cargo clean
     rm -f {{shpool_dir}}/shpool-*
+
+# Smoke-test sshr against an ephemeral Linux container (debian + sshd, no shpool, no fish)
+smoke: build
+    #!/usr/bin/env bash
+    set -euo pipefail
+    name=sshr-smoke
+    port=2222
+    platform=linux/amd64
+    binary=shpool-linux-x86_64
+
+    rt=${SSHR_CONTAINER_RUNTIME:-}
+    if [ -z "$rt" ]; then
+        if command -v docker >/dev/null 2>&1; then rt=docker
+        elif command -v podman >/dev/null 2>&1; then rt=podman
+        else echo "error: need docker or podman on PATH" >&2; exit 1
+        fi
+    fi
+
+    if [ ! -f "{{shpool_dir}}/$binary" ]; then
+        echo "error: {{shpool_dir}}/$binary not found — run 'just shpool-all' first" >&2
+        exit 1
+    fi
+
+    keydir=$(mktemp -d)
+    cleanup() {
+        rm -rf "$keydir"
+        rm -f "$HOME/.ssh/sshr-sockets/sshr@127.0.0.1:$port"
+        "$rt" rm -f "$name" >/dev/null 2>&1 || true
+    }
+    trap cleanup EXIT
+
+    echo "==> using runtime: $rt"
+    echo "==> generating ephemeral key"
+    ssh-keygen -t ed25519 -N '' -f "$keydir/id" -q
+
+    echo "==> building test image ($platform)"
+    "$rt" build --platform "$platform" -q -t "$name" -f test/Dockerfile test/ >/dev/null
+
+    echo "==> starting container on 127.0.0.1:$port"
+    "$rt" run -d --rm --platform "$platform" --name "$name" \
+        -p "127.0.0.1:$port:22" "$name" >/dev/null
+    "$rt" cp "$keydir/id.pub" "$name:/home/sshr/.ssh/authorized_keys"
+    "$rt" exec "$name" chown sshr:sshr /home/sshr/.ssh/authorized_keys
+    "$rt" exec "$name" chmod 600 /home/sshr/.ssh/authorized_keys
+
+    echo "==> waiting for sshd"
+    for _ in $(seq 1 30); do
+        ssh -q -i "$keydir/id" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -p "$port" sshr@127.0.0.1 true 2>/dev/null && break
+        sleep 0.5
+    done
+
+    echo "==> launching sshr -v (exit shell to tear down)"
+    ./target/release/sshr -v sshr@127.0.0.1 \
+        -i "$keydir/id" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p "$port"

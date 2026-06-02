@@ -24,12 +24,12 @@ def handle_result(args, answer, target_window_id, boss):
     user_vars = window.user_vars
     sshr_host = user_vars.get("sshr_host", "")
     sshr_session = user_vars.get("sshr_session", "")
-    sshr_tool = user_vars.get("sshr_tool", "")
 
-    if sshr_host and sshr_session and "shpool" in sshr_tool:
-        # Kill the remote shpool session in the background
+    if sshr_host and sshr_session:
+        shpool = "$HOME/.local/share/sshr/bin/shpool"
+        socket = "$HOME/.local/run/sshr/shpool.socket"
         subprocess.Popen(
-            ["ssh", sshr_host, f"{sshr_tool} kill {sshr_session}"],
+            ["ssh", sshr_host, f"{shpool} --socket {socket} kill {sshr_session}"],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
