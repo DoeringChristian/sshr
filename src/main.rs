@@ -1,6 +1,4 @@
 mod cmd;
-mod kitty;
-mod probe;
 mod reconnect;
 mod session;
 mod ssh;
@@ -8,10 +6,16 @@ mod upload;
 mod verbose;
 
 use anyhow::{bail, Result};
+use base64::Engine;
 use clap::Parser;
 use owo_colors::OwoColorize;
 
 use ssh::SshContext;
+
+fn set_user_var(key: &str, value: &str) {
+    let encoded = base64::engine::general_purpose::STANDARD.encode(value);
+    eprint!("\x1b]1337;SetUserVar={key}={encoded}\x07");
+}
 
 #[derive(Parser)]
 #[command(
@@ -28,7 +32,7 @@ struct Cli {
     #[arg(long)]
     remote_cwd: Option<String>,
 
-    /// Shell to use on remote (default: auto-detect fish)
+    /// Shell to use on remote (default: login shell)
     #[arg(long)]
     shell: Option<String>,
 
@@ -36,7 +40,7 @@ struct Cli {
     #[arg(long)]
     force_upload: bool,
 
-    /// Verbose: log probe results, paths, and SSH commands
+    /// Verbose: log paths and SSH commands
     #[arg(short = 'v', long)]
     verbose: bool,
 
@@ -172,12 +176,7 @@ fn cmd_connect(
 ) -> Result<()> {
     let ssh = SshContext::new()?;
 
-    if kitty::is_kitty() {
-        kitty::set_user_var("sshr_host", host);
-    }
-
-    let fish_path = probe::probe_remote(&ssh, host, ssh_args)?;
-    let shell_path = shell.or(fish_path);
+    set_user_var("sshr_host", host);
 
     ensure_remote_shpool(&ssh, host, ssh_args, force_upload)?;
 
@@ -187,13 +186,11 @@ fn cmd_connect(
         session::new_session_name(&ssh, host, ssh_args)?
     };
 
-    if kitty::is_kitty() {
-        kitty::set_user_var("sshr_session", &session_name);
-    }
+    set_user_var("sshr_session", &session_name);
 
     let remote_cmd = cmd::build_shpool_cmd(
         &session_name,
-        shell_path.as_deref(),
+        shell.as_deref(),
         remote_cwd.as_deref(),
     );
 

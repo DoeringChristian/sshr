@@ -8,7 +8,7 @@ sshr wraps SSH with:
 - **Automatic reconnection** — prompts to reconnect when the connection is lost
 - **SSH multiplexing** — reuses a single TCP connection for fast new windows
 - **Auto-upload** — ships a shpool binary to remotes that don't have it installed
-- **Shell detection** — automatically uses fish if available on the remote
+- **Shell-agnostic** — works with any login shell (bash, zsh, fish, etc.) and injects OSC 7 CWD reporting
 - **Kitty integration** — optional kittens for smart window launch/close
 
 ## Install
@@ -35,10 +35,13 @@ export PATH="$PWD/sshr/bin:$PATH"
 sshr myhost
 
 # Attach to an existing session
-sshr -a myhost
+sshr attach myhost
 
 # Start in a specific directory
 sshr --remote-cwd ~/projects myhost
+
+# Use a specific shell on the remote
+sshr --shell /bin/zsh myhost
 
 # List remote sessions
 sshr list myhost
@@ -50,9 +53,20 @@ sshr kill myhost s0 s1
 sshr clean myhost
 ```
 
+## Shell Support
+
+sshr deploys lightweight init files to the remote (`~/.local/share/sshr/init/`) that add OSC 7 CWD reporting to your shell. This enables features like opening new windows in the same remote directory. Supported shells:
+
+- **bash** — init via `ENV` + POSIX mode
+- **zsh** — init via `ZDOTDIR`
+- **fish** — init via `XDG_DATA_DIRS`
+- **other** — launched directly (no OSC 7 injection)
+
+By default sshr uses the remote's login shell. Use `--shell` to override.
+
 ## Kitty Integration
 
-Copy `kitty/smart_launch.py` and `kitty/smart_close.py` to `~/.config/kitty/`, then add to `kitty.conf`:
+sshr works in any terminal, but ships optional kittens for kitty users. Copy `kitty/smart_launch.py` and `kitty/smart_close.py` to `~/.config/kitty/`, then add to `kitty.conf`:
 
 ```conf
 map cmd+enter kitten smart_launch.py
@@ -61,7 +75,9 @@ map cmd+x kitten smart_close.py
 map kitty_mod+x kitten smart_close.py
 ```
 
-This makes `cmd+enter` context-aware: in an sshr window it opens a new sshr session to the same host in the same directory; in a local window it opens a local shell in the current directory. `cmd+x` kills the remote shpool session when closing an sshr window.
+**smart_launch** (`cmd+enter`) is context-aware: in an sshr window it opens a new sshr session to the same host in the same directory; in a local window it opens a local shell in the current directory. If your `~/.config/kitty/ssh.conf` has a `login_shell` directive, the kitten passes it as `--shell` to sshr.
+
+**smart_close** (`cmd+x`) kills the remote shpool session when closing an sshr window.
 
 ## Pre-built shpool Binaries
 

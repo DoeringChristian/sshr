@@ -7,8 +7,10 @@ use crate::vlog;
 
 pub const REMOTE_SHPOOL_PATH: &str = "$HOME/.local/share/sshr/bin/shpool";
 pub const REMOTE_SOCKET_PATH: &str = "$HOME/.local/run/sshr/shpool.socket";
+pub const REMOTE_LAUNCH: &str = "$HOME/.local/share/sshr/init/launch.sh";
 const REMOTE_SHPOOL_DIR: &str = "~/.local/share/sshr/bin";
 const REMOTE_SOCKET_DIR: &str = "~/.local/run/sshr";
+const REMOTE_INIT_DIR: &str = "$HOME/.local/share/sshr/init";
 
 #[derive(Debug)]
 struct RemotePlatform {
@@ -113,6 +115,50 @@ pub fn ensure_shpool(
 
     // Ensure socket directory exists (may be cleared on reboot)
     ssh.run_capture(host, extra_args, &format!("mkdir -p {REMOTE_SOCKET_DIR}"))?;
+
+    ensure_init_files(ssh, host, extra_args)?;
+    Ok(())
+}
+
+fn ensure_init_files(ssh: &SshContext, host: &str, extra_args: &[String]) -> Result<()> {
+    let script = format!(
+        r#"mkdir -p {REMOTE_INIT_DIR}/zsh {REMOTE_INIT_DIR}/fish/vendor_conf.d
+cat > {REMOTE_INIT_DIR}/launch.sh << 'SSHR_EOF'
+#!/bin/sh
+login_shell="${{1:-$SHELL}}"
+shell_name=$(basename "$login_shell")
+init_dir="$HOME/.local/share/sshr/init"
+
+case "$shell_name" in
+    bash) exec env ENV="$init_dir/bash_init.sh" "$login_shell" --posix ;;
+    zsh)  exec env ZDOTDIR="$init_dir/zsh" "$login_shell" ;;
+    fish) exec env XDG_DATA_DIRS="$init_dir:${{XDG_DATA_DIRS:-/usr/local/share:/usr/share}}" "$login_shell" ;;
+    *)    exec "$login_shell" ;;
+esac
+SSHR_EOF
+chmod +x {REMOTE_INIT_DIR}/launch.sh
+cat > {REMOTE_INIT_DIR}/bash_init.sh << 'SSHR_EOF'
+set +o posix
+unset ENV
+[ -f ~/.bashrc ] && . ~/.bashrc
+__sshr_osc7() {{ printf '\033]7;file://%s%s\a' "$(hostname)" "$PWD"; }}
+PROMPT_COMMAND="${{PROMPT_COMMAND:+$PROMPT_COMMAND; }}__sshr_osc7"
+SSHR_EOF
+cat > {REMOTE_INIT_DIR}/zsh/.zshenv << 'SSHR_EOF'
+ZDOTDIR="$HOME"
+[ -f "$ZDOTDIR/.zshenv" ] && . "$ZDOTDIR/.zshenv"
+__sshr_osc7() {{ printf '\033]7;file://%s%s\a' "$(hostname)" "$PWD" }}
+precmd_functions+=(__sshr_osc7)
+SSHR_EOF
+cat > {REMOTE_INIT_DIR}/fish/vendor_conf.d/sshr.fish << 'SSHR_EOF'
+function __sshr_osc7 --on-event fish_prompt
+    printf '\e]7;file://%s%s\a' (hostname) $PWD
+end
+SSHR_EOF
+"#
+    );
+    ssh.run_capture(host, extra_args, &script)?;
+    vlog!("init: created shell init files at {REMOTE_INIT_DIR}");
     Ok(())
 }
 
