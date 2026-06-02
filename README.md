@@ -62,7 +62,13 @@ sshr deploys lightweight init files to the remote (`~/.local/share/sshr/init/`) 
 - **fish** — init via `XDG_DATA_DIRS`
 - **other** — launched directly (no OSC 7 injection)
 
-By default sshr uses the remote's login shell. Use `--shell` to override.
+By default sshr uses the remote's login shell. To always use a specific shell, set it in `~/.config/sshr/config`:
+
+```
+shell = /usr/bin/fish
+```
+
+The `--shell` flag overrides the config file.
 
 ## Kitty Integration
 
@@ -75,7 +81,7 @@ map cmd+x kitten smart_close.py
 map kitty_mod+x kitten smart_close.py
 ```
 
-**smart_launch** (`cmd+enter`) is context-aware: in an sshr window it opens a new sshr session to the same host in the same directory; in a local window it opens a local shell in the current directory. If your `~/.config/kitty/ssh.conf` has a `login_shell` directive, the kitten passes it as `--shell` to sshr.
+**smart_launch** (`cmd+enter`) is context-aware: in an sshr window it opens a new sshr session to the same host in the same directory; in a local window it opens a local shell in the current directory.
 
 **smart_close** (`cmd+x`) kills the remote shpool session when closing an sshr window.
 

@@ -1,4 +1,5 @@
 mod cmd;
+mod config;
 mod reconnect;
 mod session;
 mod ssh;
@@ -59,6 +60,7 @@ fn main() {
 fn run() -> Result<()> {
     let cli = Cli::parse();
     verbose::set(cli.verbose);
+    let cfg = config::Config::load();
     let first = &cli.args[0];
 
     match first.as_str() {
@@ -75,7 +77,8 @@ fn run() -> Result<()> {
                 bail!("usage: sshr attach <host>");
             }
             let ssh_args: Vec<String> = cli.args[2..].to_vec();
-            cmd_connect(&host, &ssh_args, true, cli.remote_cwd, cli.shell, cli.force_upload)
+            let shell = cli.shell.or(cfg.shell);
+            cmd_connect(&host, &ssh_args, true, cli.remote_cwd, shell, cli.force_upload)
         }
         "kill" => {
             let host = cli.args.get(1).cloned().unwrap_or_default();
@@ -95,7 +98,8 @@ fn run() -> Result<()> {
         _ => {
             let host = first.clone();
             let ssh_args: Vec<String> = cli.args[1..].to_vec();
-            cmd_connect(&host, &ssh_args, false, cli.remote_cwd, cli.shell, cli.force_upload)
+            let shell = cli.shell.or(cfg.shell);
+            cmd_connect(&host, &ssh_args, false, cli.remote_cwd, shell, cli.force_upload)
         }
     }
 }

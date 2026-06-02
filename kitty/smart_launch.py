@@ -3,28 +3,13 @@
 When the active window is an sshr remote session, launches a new sshr
 window to the same host in the same working directory. Otherwise falls
 back to launching a local window with cwd=current.
-
-Reads login_shell from kitty's ssh.conf and passes it as --shell.
 """
 
-import os
 from urllib.parse import urlparse
 
 
 def main(args):
     pass
-
-
-def get_login_shell():
-    conf = os.path.expanduser("~/.config/kitty/ssh.conf")
-    if not os.path.exists(conf):
-        return None
-    with open(conf) as f:
-        for line in f:
-            line = line.strip()
-            if line.startswith("login_shell "):
-                return line.split(None, 1)[1]
-    return None
 
 
 from kittens.tui.handler import result_handler
@@ -50,9 +35,6 @@ def handle_result(args, answer, target_window_id, boss):
             remote_cwd = urlparse(url).path
 
         cmd = ["sshr"]
-        shell = get_login_shell()
-        if shell:
-            cmd.extend(["--shell", shell])
         if remote_cwd:
             cmd.extend(["--remote-cwd", remote_cwd])
         cmd.append(sshr_host)
