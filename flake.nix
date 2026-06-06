@@ -18,7 +18,7 @@
         pname = "sshr";
         version = "0.1.0";
         src = ./.;
-        cargoHash = "sha256-NeO480aguQF1lQTbA6T8mbmwOURCbPciAZ5NoQpzPnU=";
+        cargoHash = "sha256-vsOTwd+hP0yKXnpOykvALkVquGJYssCCWQ+1KG7FSkc=";
 
         postInstall = ''
           mkdir -p $out/share/sshr/{kitty,shpool}
