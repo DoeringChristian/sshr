@@ -145,6 +145,7 @@ fn ensure_init_files(
         r#"mkdir -p {REMOTE_INIT_DIR}/zsh {REMOTE_INIT_DIR}/fish/vendor_conf.d
 cat > {REMOTE_INIT_DIR}/launch.sh << 'SSHR_EOF'
 #!/bin/sh
+export SSH_CONNECTION="${{SSH_CONNECTION:-sshr}}"
 {env_section}login_shell="${{1:-$SHELL}}"
 if [ "${{login_shell#/}}" = "$login_shell" ]; then
     login_shell=$(command -v "$login_shell" 2>/dev/null || echo "$login_shell")
