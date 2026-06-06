@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use owo_colors::OwoColorize;
 use std::path::PathBuf;
 
+use crate::config::{EnvDirective, HostConfig};
 use crate::ssh::SshContext;
 use crate::vlog;
 
@@ -71,10 +72,8 @@ fn upload_shpool(
     vlog!("upload: remote path = {REMOTE_SHPOOL_DIR}/shpool");
     eprintln!("Uploading shpool to {}...", host.cyan().bold());
 
-    // Create sshr directory on remote
     ssh.run_capture(host, extra_args, &format!("mkdir -p {REMOTE_SHPOOL_DIR}"))?;
 
-    // Upload binary
     ssh.scp_upload(
         host,
         extra_args,
@@ -82,7 +81,6 @@ fn upload_shpool(
         &format!("{REMOTE_SHPOOL_DIR}/shpool"),
     )?;
 
-    // Make executable
     ssh.run_capture(
         host,
         extra_args,
@@ -99,6 +97,7 @@ pub fn ensure_shpool(
     host: &str,
     extra_args: &[String],
     force: bool,
+    host_cfg: &HostConfig,
 ) -> Result<()> {
     if !force && has_sshr_shpool(ssh, host, extra_args)? {
         vlog!("shpool: present at {REMOTE_SHPOOL_PATH}");
@@ -113,19 +112,43 @@ pub fn ensure_shpool(
         }
     }
 
-    // Ensure socket directory exists (may be cleared on reboot)
     ssh.run_capture(host, extra_args, &format!("mkdir -p {REMOTE_SOCKET_DIR}"))?;
 
-    ensure_init_files(ssh, host, extra_args)?;
+    ensure_init_files(ssh, host, extra_args, host_cfg)?;
     Ok(())
 }
 
-fn ensure_init_files(ssh: &SshContext, host: &str, extra_args: &[String]) -> Result<()> {
+fn build_env_exports(env: &[EnvDirective]) -> String {
+    let mut lines = Vec::new();
+    for directive in env {
+        let EnvDirective::Set(name, value) = directive;
+        let escaped = value.replace('\'', "'\\''");
+        lines.push(format!("export {name}='{escaped}'"));
+    }
+    lines.join("\n")
+}
+
+fn ensure_init_files(
+    ssh: &SshContext,
+    host: &str,
+    extra_args: &[String],
+    host_cfg: &HostConfig,
+) -> Result<()> {
+    let env_block = build_env_exports(&host_cfg.env);
+    let env_section = if env_block.is_empty() {
+        String::new()
+    } else {
+        format!("{env_block}\n")
+    };
+
     let script = format!(
         r#"mkdir -p {REMOTE_INIT_DIR}/zsh {REMOTE_INIT_DIR}/fish/vendor_conf.d
 cat > {REMOTE_INIT_DIR}/launch.sh << 'SSHR_EOF'
 #!/bin/sh
-login_shell="${{1:-$SHELL}}"
+{env_section}login_shell="${{1:-$SHELL}}"
+if [ "${{login_shell#/}}" = "$login_shell" ]; then
+    login_shell=$(command -v "$login_shell" 2>/dev/null || echo "$login_shell")
+fi
 shell_name=$(basename "$login_shell")
 init_dir="$HOME/.local/share/sshr/init"
 
@@ -174,7 +197,6 @@ fn detect_remote_platform(
     let os = parts.first().unwrap_or(&"unknown").to_lowercase();
     let mut arch = parts.get(1).unwrap_or(&"unknown").to_string();
 
-    // Normalize arch names
     match arch.as_str() {
         "amd64" => arch = "x86_64".into(),
         "arm64" => arch = "aarch64".into(),
@@ -185,7 +207,6 @@ fn detect_remote_platform(
 }
 
 fn find_shpool_dir() -> Result<PathBuf> {
-    // Check SSHR_SHPOOL_DIR env var first
     if let Ok(dir) = std::env::var("SSHR_SHPOOL_DIR") {
         let path = PathBuf::from(dir);
         if path.is_dir() {
@@ -195,11 +216,6 @@ fn find_shpool_dir() -> Result<PathBuf> {
 
     let exe = std::env::current_exe()?.canonicalize()?;
 
-    // Walk up from the executable, checking each ancestor for shpool binaries.
-    // This handles:
-    //   - Installed layout: $prefix/bin/sshr → $prefix/shpool/bin/
-    //   - Nix layout: $prefix/bin/sshr → $prefix/share/sshr/shpool/bin/
-    //   - Dev layout: target/debug/sshr → ./shpool/bin/ (project root)
     let mut dir = exe.parent();
     while let Some(d) = dir {
         let repo_path = d.join("shpool/bin");

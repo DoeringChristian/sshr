@@ -1,5 +1,6 @@
 mod cmd;
 mod config;
+mod copy;
 mod reconnect;
 mod session;
 mod ssh;
@@ -11,6 +12,7 @@ use base64::Engine;
 use clap::Parser;
 use owo_colors::OwoColorize;
 
+use config::HostConfig;
 use ssh::SshContext;
 
 fn set_user_var(key: &str, value: &str) {
@@ -77,8 +79,8 @@ fn run() -> Result<()> {
                 bail!("usage: sshr attach <host>");
             }
             let ssh_args: Vec<String> = cli.args[2..].to_vec();
-            let shell = cli.shell.or(cfg.shell);
-            cmd_connect(&host, &ssh_args, true, cli.remote_cwd, shell, cli.force_upload)
+            let host_cfg = cfg.for_host(&host);
+            cmd_connect(&host, &ssh_args, true, &cli, host_cfg)
         }
         "kill" => {
             let host = cli.args.get(1).cloned().unwrap_or_default();
@@ -98,19 +100,26 @@ fn run() -> Result<()> {
         _ => {
             let host = first.clone();
             let ssh_args: Vec<String> = cli.args[1..].to_vec();
-            let shell = cli.shell.or(cfg.shell);
-            cmd_connect(&host, &ssh_args, false, cli.remote_cwd, shell, cli.force_upload)
+            let host_cfg = cfg.for_host(&host);
+            cmd_connect(&host, &ssh_args, false, &cli, host_cfg)
         }
     }
 }
 
-fn ensure_remote_shpool(ssh: &SshContext, host: &str, extra_args: &[String], force_upload: bool) -> Result<()> {
-    upload::ensure_shpool(ssh, host, extra_args, force_upload)
+fn ensure_remote_shpool(
+    ssh: &SshContext,
+    host: &str,
+    extra_args: &[String],
+    force_upload: bool,
+    host_cfg: &HostConfig,
+) -> Result<()> {
+    upload::ensure_shpool(ssh, host, extra_args, force_upload, host_cfg)
 }
 
 fn cmd_list(host: &str, all: bool) -> Result<()> {
     let ssh = SshContext::new()?;
-    ensure_remote_shpool(&ssh, host, &[], false)?;
+    let default_cfg = HostConfig::default();
+    ensure_remote_shpool(&ssh, host, &[], false, &default_cfg)?;
 
     let sessions = session::list_sessions(&ssh, host, &[])?;
     let prefix = session::local_prefix();
@@ -131,7 +140,8 @@ fn cmd_list(host: &str, all: bool) -> Result<()> {
 
 fn cmd_kill(host: &str, sessions: &[String], all: bool) -> Result<()> {
     let ssh = SshContext::new()?;
-    ensure_remote_shpool(&ssh, host, &[], false)?;
+    let default_cfg = HostConfig::default();
+    ensure_remote_shpool(&ssh, host, &[], false, &default_cfg)?;
 
     let to_kill = if sessions.is_empty() {
         let entries = session::list_sessions(&ssh, host, &[])?;
@@ -166,7 +176,8 @@ fn cmd_kill(host: &str, sessions: &[String], all: bool) -> Result<()> {
 
 fn cmd_clean(host: &str, all: bool) -> Result<()> {
     let ssh = SshContext::new()?;
-    ensure_remote_shpool(&ssh, host, &[], false)?;
+    let default_cfg = HostConfig::default();
+    ensure_remote_shpool(&ssh, host, &[], false, &default_cfg)?;
     session::clean_detached(&ssh, host, all)
 }
 
@@ -174,15 +185,27 @@ fn cmd_connect(
     host: &str,
     ssh_args: &[String],
     attach: bool,
-    remote_cwd: Option<String>,
-    shell: Option<String>,
-    force_upload: bool,
+    cli: &Cli,
+    host_cfg: HostConfig,
 ) -> Result<()> {
+    // Delegate to another command if configured
+    if let Some(ref delegate) = host_cfg.delegate {
+        let mut cmd = std::process::Command::new(delegate);
+        cmd.arg(host);
+        cmd.args(ssh_args);
+        let status = cmd.status()?;
+        std::process::exit(status.code().unwrap_or(1));
+    }
+
     let ssh = SshContext::new()?;
 
     set_user_var("sshr_host", host);
 
-    ensure_remote_shpool(&ssh, host, ssh_args, force_upload)?;
+    ensure_remote_shpool(&ssh, host, ssh_args, cli.force_upload, &host_cfg)?;
+
+    if !host_cfg.copy.is_empty() {
+        copy::run_copy_directives(&ssh, host, ssh_args, &host_cfg.copy)?;
+    }
 
     let session_name = if attach {
         session::pick_session_interactive(&ssh, host, ssh_args)?
@@ -191,6 +214,9 @@ fn cmd_connect(
     };
 
     set_user_var("sshr_session", &session_name);
+
+    let shell = cli.shell.clone().or(host_cfg.shell.clone());
+    let remote_cwd = cli.remote_cwd.clone().or(host_cfg.cwd.clone());
 
     let remote_cmd = cmd::build_shpool_cmd(
         &session_name,

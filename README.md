@@ -62,13 +62,87 @@ sshr deploys lightweight init files to the remote (`~/.local/share/sshr/init/`) 
 - **fish** — init via `XDG_DATA_DIRS`
 - **other** — launched directly (no OSC 7 injection)
 
-By default sshr uses the remote's login shell. To always use a specific shell, set it in `~/.config/sshr/config`:
+By default sshr uses the remote's login shell. Use `--shell` to override, or set a default in the config file.
 
-```
-shell = /usr/bin/fish
+## Configuration
+
+sshr reads `~/.config/sshr/config.toml` (or `$XDG_CONFIG_HOME/sshr/config.toml`).
+
+### Example
+
+```toml
+# Defaults for all hosts
+shell = "fish"
+
+[env]
+PATH = "$PATH:$HOME/.nix-profile/bin"
+
+# Per-host overrides
+[hosts."myserver-*"]
+shell = "/bin/zsh"
+copy = [".vimrc"]
+
+[hosts."myserver-*".env]
+EDITOR = "vim"
+
+[hosts."legacy-*"]
+delegate = "ssh"
 ```
 
-The `--shell` flag overrides the config file.
+### Top-level options
+
+**shell** — Login shell on the remote. Bare names (e.g. `"fish"`) are resolved via PATH on the remote. CLI `--shell` overrides this.
+
+**cwd** — Working directory on the remote. CLI `--remote-cwd` overrides this.
+
+**delegate** — Skip sshr for this host and run the specified command instead (e.g. `"ssh"` for plain SSH).
+
+**shell_integration** — Toggle OSC 7 CWD reporting injection (`true`/`false`). Default: `true`.
+
+### `[env]`
+
+Set environment variables on the remote:
+
+```toml
+[env]
+PATH = "$PATH:$HOME/.nix-profile/bin"
+EDITOR = "vim"
+TERM_PROGRAM = "_kitty_copy_env_var_"  # copies value from local env
+```
+
+Variables are expanded recursively: `"${HOME}/${VAR1}/b"`.
+
+### `copy`
+
+Copy files from local to remote via SCP. Paths are relative to HOME on both sides.
+
+```toml
+# Simple: list of files
+copy = [".vimrc", ".zshrc"]
+
+# Detailed: with destination, glob, or exclusions
+[[copy]]
+src = ".vimrc"
+dest = "my-conf/vim/vimrc"
+
+[[copy]]
+src = "images/*"
+glob = true
+exclude = ["*.jpg", "*.bmp"]
+```
+
+### `[hosts."pattern"]`
+
+Per-host sections with glob pattern matching. Supports `*`, `?`, and `user@host` form. Each section can override any top-level option:
+
+```toml
+[hosts."admin@prod-*"]
+shell = "/bin/bash"
+cwd = "~/deployments"
+
+[hosts."admin@prod-*".env]
+DEPLOY_ENV = "production"
+```
 
 ## Kitty Integration
 
