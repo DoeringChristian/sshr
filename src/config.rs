@@ -123,7 +123,6 @@ impl Config {
                 merge_config(&mut result, host_cfg);
             }
         }
-        resolve_env(&mut result.env);
         result
     }
 }
@@ -194,71 +193,6 @@ fn convert_copy(copy: &Option<Vec<TomlCopy>>) -> Vec<CopyDirective> {
             },
         })
         .collect()
-}
-
-// --- Env resolution ---
-
-fn resolve_env(env: &mut Vec<EnvDirective>) {
-    let mut resolved: Vec<(String, String)> = Vec::new();
-
-    for directive in env.iter_mut() {
-        let EnvDirective::Set(name, value) = directive;
-        let mut expanded = value.clone();
-        let mut changed = true;
-        let mut iterations = 0;
-        while changed && iterations < 10 {
-            changed = false;
-            iterations += 1;
-            let prev = expanded.clone();
-            for (k, v) in &resolved {
-                expanded = expanded.replace(&format!("${{{k}}}"), v);
-                expanded = expanded.replace(&format!("${k}"), v);
-            }
-            let snapshot = expanded.clone();
-            expanded = expand_env_vars(&snapshot);
-            if expanded != prev {
-                changed = true;
-            }
-        }
-        *value = expanded.clone();
-        resolved.push((name.clone(), expanded));
-    }
-}
-
-fn expand_env_vars(s: &str) -> String {
-    let mut result = String::with_capacity(s.len());
-    let mut chars = s.chars().peekable();
-
-    while let Some(c) = chars.next() {
-        if c == '$' {
-            if chars.peek() == Some(&'{') {
-                chars.next();
-                let name: String = chars.by_ref().take_while(|&c| c != '}').collect();
-                if let Ok(val) = std::env::var(&name) {
-                    result.push_str(&val);
-                } else {
-                    result.push_str(&format!("${{{name}}}"));
-                }
-            } else {
-                let name: String = chars
-                    .by_ref()
-                    .take_while(|c| c.is_alphanumeric() || *c == '_')
-                    .collect();
-                if name.is_empty() {
-                    result.push('$');
-                } else if let Ok(val) = std::env::var(&name) {
-                    result.push_str(&val);
-                } else {
-                    result.push('$');
-                    result.push_str(&name);
-                }
-            }
-        } else {
-            result.push(c);
-        }
-    }
-
-    result
 }
 
 // --- Host matching ---

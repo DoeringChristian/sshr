@@ -122,8 +122,8 @@ fn build_env_exports(env: &[EnvDirective]) -> String {
     let mut lines = Vec::new();
     for directive in env {
         let EnvDirective::Set(name, value) = directive;
-        let escaped = value.replace('\'', "'\\''");
-        lines.push(format!("export {name}='{escaped}'"));
+        let escaped = value.replace('\\', "\\\\").replace('"', "\\\"");
+        lines.push(format!("export {name}=\"{escaped}\""));
     }
     lines.join("\n")
 }
