@@ -230,7 +230,12 @@ fn cmd_connect(
         session_name.green().bold()
     );
 
-    reconnect::run_with_reconnect(|| {
+    let result = reconnect::run_with_reconnect(|| {
         ssh.run_interactive(host, ssh_args, Some(&remote_cmd))
-    })
+    });
+
+    set_user_var("sshr_host", "");
+    set_user_var("sshr_session", "");
+
+    result
 }
