@@ -7,7 +7,7 @@ mod ssh;
 mod upload;
 mod verbose;
 
-use anyhow::{bail, Result};
+use anyhow::Result;
 use base64::Engine;
 use clap::Parser;
 use owo_colors::OwoColorize;
@@ -47,8 +47,12 @@ struct Cli {
     #[arg(short = 'v', long)]
     verbose: bool,
 
-    /// Subcommand or host, followed by optional SSH args
-    #[arg(required = true, trailing_var_arg = true)]
+    /// Remote host
+    #[arg(required = true)]
+    host: String,
+
+    /// Subcommand (list, attach, kill, clean) or extra SSH args
+    #[arg(trailing_var_arg = true)]
     args: Vec<String>,
 }
 
@@ -63,45 +67,25 @@ fn run() -> Result<()> {
     let cli = Cli::parse();
     verbose::set(cli.verbose);
     let cfg = config::Config::load();
-    let first = &cli.args[0];
+    let host = &cli.host;
+    let subcmd = cli.args.first().map(|s| s.as_str());
 
-    match first.as_str() {
-        "list" | "ls" => {
-            let host = cli.args.get(1).cloned().unwrap_or_default();
-            if host.is_empty() {
-                bail!("usage: sshr list <host>");
-            }
-            cmd_list(&host, cli.all)
-        }
-        "attach" => {
-            let host = cli.args.get(1).cloned().unwrap_or_default();
-            if host.is_empty() {
-                bail!("usage: sshr attach <host>");
-            }
-            let ssh_args: Vec<String> = cli.args[2..].to_vec();
-            let host_cfg = cfg.for_host(&host);
-            cmd_connect(&host, &ssh_args, true, &cli, host_cfg)
-        }
-        "kill" => {
-            let host = cli.args.get(1).cloned().unwrap_or_default();
-            if host.is_empty() {
-                bail!("usage: sshr kill <host> [session...]");
-            }
-            let sessions: Vec<String> = cli.args[2..].to_vec();
-            cmd_kill(&host, &sessions, cli.all)
-        }
-        "clean" => {
-            let host = cli.args.get(1).cloned().unwrap_or_default();
-            if host.is_empty() {
-                bail!("usage: sshr clean <host>");
-            }
-            cmd_clean(&host, cli.all)
-        }
-        _ => {
-            let host = first.clone();
+    match subcmd {
+        Some("list" | "ls") => cmd_list(host, cli.all),
+        Some("attach") => {
             let ssh_args: Vec<String> = cli.args[1..].to_vec();
-            let host_cfg = cfg.for_host(&host);
-            cmd_connect(&host, &ssh_args, false, &cli, host_cfg)
+            let host_cfg = cfg.for_host(host);
+            cmd_connect(host, &ssh_args, true, &cli, host_cfg)
+        }
+        Some("kill") => {
+            let sessions: Vec<String> = cli.args[1..].to_vec();
+            cmd_kill(host, &sessions, cli.all)
+        }
+        Some("clean") => cmd_clean(host, cli.all),
+        _ => {
+            let ssh_args = cli.args.clone();
+            let host_cfg = cfg.for_host(host);
+            cmd_connect(host, &ssh_args, false, &cli, host_cfg)
         }
     }
 }
@@ -144,29 +128,7 @@ fn cmd_kill(host: &str, sessions: &[String], all: bool) -> Result<()> {
     ensure_remote_shpool(&ssh, host, &[], false, &default_cfg)?;
 
     let to_kill = if sessions.is_empty() {
-        let entries = session::list_sessions(&ssh, host, &[])?;
-        let prefix = session::local_prefix();
-        let entries: Vec<_> = entries
-            .into_iter()
-            .filter(|s| all || s.name.starts_with(&format!("{prefix}-")))
-            .collect();
-        if entries.is_empty() {
-            eprintln!("No sessions on {host}.");
-            return Ok(());
-        }
-        eprintln!("Sessions on {}:", host.cyan().bold());
-        for entry in &entries {
-            eprintln!("  {}", entry.raw_line);
-        }
-        eprint!("Sessions to kill (space-separated): ");
-        std::io::Write::flush(&mut std::io::stderr())?;
-        let mut input = String::new();
-        std::io::stdin().read_line(&mut input)?;
-        let input = input.trim();
-        if input.is_empty() {
-            return Ok(());
-        }
-        input.split_whitespace().map(String::from).collect()
+        session::pick_sessions_to_kill(&ssh, host, all)?
     } else {
         sessions.to_vec()
     };
@@ -208,7 +170,7 @@ fn cmd_connect(
     }
 
     let session_name = if attach {
-        session::pick_session_interactive(&ssh, host, ssh_args)?
+        session::pick_session_interactive(&ssh, host, ssh_args, cli.all)?
     } else {
         session::new_session_name(&ssh, host, ssh_args)?
     };

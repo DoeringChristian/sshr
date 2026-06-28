@@ -1,7 +1,7 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, Result};
+use dialoguer::{MultiSelect, Select};
 use owo_colors::OwoColorize;
 use std::collections::HashSet;
-use std::io::{self, Write};
 
 use crate::ssh::SshContext;
 use crate::upload::{REMOTE_SHPOOL_PATH, REMOTE_SOCKET_PATH};
@@ -71,38 +71,54 @@ pub fn pick_session_interactive(
     ssh: &SshContext,
     host: &str,
     extra_args: &[String],
+    all: bool,
 ) -> Result<String> {
     let prefix = local_prefix();
     let sessions: Vec<_> = list_sessions(ssh, host, extra_args)?
         .into_iter()
-        .filter(|s| s.name.starts_with(&format!("{prefix}-")))
+        .filter(|s| all || s.name.starts_with(&format!("{prefix}-")))
         .collect();
     if sessions.is_empty() {
         bail!("no existing sessions on {}", host);
     }
 
-    eprintln!("Sessions on {}:", host.cyan().bold());
-    for (i, entry) in sessions.iter().enumerate() {
-        eprintln!("  [{}] {}", (i + 1).to_string().bold(), entry.raw_line);
-    }
+    let items: Vec<&str> = sessions.iter().map(|s| s.raw_line.as_str()).collect();
+    let idx = Select::new()
+        .with_prompt("Attach to session")
+        .items(&items)
+        .default(0)
+        .interact()?;
 
-    eprint!("Select session: ");
-    io::stderr().flush()?;
-
-    let mut input = String::new();
-    io::stdin()
-        .read_line(&mut input)
-        .context("failed to read input")?;
-    let input = input.trim();
-
-    let idx: usize = input.parse().context("invalid selection")?;
-    if idx < 1 || idx > sessions.len() {
-        bail!("selection out of range");
-    }
-
-    let name = sessions[idx - 1].name.clone();
+    let name = sessions[idx].name.clone();
     vlog!("session: selected = {name}");
     Ok(name)
+}
+
+pub fn pick_sessions_to_kill(
+    ssh: &SshContext,
+    host: &str,
+    all: bool,
+) -> Result<Vec<String>> {
+    let prefix = local_prefix();
+    let sessions: Vec<_> = list_sessions(ssh, host, &[])?
+        .into_iter()
+        .filter(|s| all || s.name.starts_with(&format!("{prefix}-")))
+        .collect();
+    if sessions.is_empty() {
+        bail!("no sessions on {}", host);
+    }
+
+    let items: Vec<&str> = sessions.iter().map(|s| s.raw_line.as_str()).collect();
+    let indices = MultiSelect::new()
+        .with_prompt("Kill sessions (space to toggle, enter to confirm)")
+        .items(&items)
+        .interact()?;
+
+    if indices.is_empty() {
+        bail!("no sessions selected");
+    }
+
+    Ok(indices.iter().map(|&i| sessions[i].name.clone()).collect())
 }
 
 pub fn kill_sessions(
