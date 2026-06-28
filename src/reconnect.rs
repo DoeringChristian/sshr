@@ -1,7 +1,16 @@
 use anyhow::Result;
 use owo_colors::OwoColorize;
 use std::io::Read;
-use std::process::ExitStatus;
+use std::process::{Command, ExitStatus, Stdio};
+
+fn reset_terminal() {
+    let _ = Command::new("stty")
+        .arg("sane")
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+}
 
 /// Run a connection function in a loop, prompting to reconnect on failure.
 pub fn run_with_reconnect<F>(connect: F) -> Result<()>
@@ -10,6 +19,7 @@ where
 {
     loop {
         let status = connect()?;
+        reset_terminal();
 
         if status.success() {
             break;
