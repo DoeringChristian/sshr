@@ -7,7 +7,7 @@ use crate::ssh::SshContext;
 use crate::vlog;
 
 fn wal_path() -> PathBuf {
-    dirs::data_dir().join("sshr").join("close.wal")
+    data_dir().join("sshr").join("close.wal")
 }
 
 #[derive(Debug, Clone)]
@@ -83,7 +83,7 @@ pub fn replay(ssh: &SshContext, host: &str) {
     }
 
     let names: Vec<String> = pending.iter().map(|e| e.session.clone()).collect();
-    vlog!("wal: replaying {} pending close(s) for {host}", names.len());
+    vlog!("wal: replaying {} pending close(s) for {host}: {}", names.len(), names.join(", "));
 
     if session::kill_sessions(ssh, host, &names).is_ok() {
         let remaining: Vec<WalEntry> = entries
@@ -105,24 +105,13 @@ fn remove_entry(host: &str, session_name: &str) {
     vlog!("wal: removed {host}:{session_name}");
 }
 
-mod dirs {
-    use std::path::PathBuf;
-
-    pub fn data_dir() -> PathBuf {
-        std::env::var("XDG_DATA_HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| {
-                home().join(if cfg!(target_os = "macos") {
-                    "Library/Application Support"
-                } else {
-                    ".local/share"
-                })
-            })
-    }
-
-    fn home() -> PathBuf {
-        std::env::var("HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from("/tmp"))
-    }
+fn data_dir() -> PathBuf {
+    std::env::var("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            std::env::var("HOME")
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| PathBuf::from("/tmp"))
+                .join(".local/share")
+        })
 }

@@ -10,6 +10,14 @@ fn reset_terminal() {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status();
+    eprint!(concat!(
+        "\x1b[?1049l", // exit alternate screen
+        "\x1b[?1006l", // disable SGR mouse mode
+        "\x1b[?1003l", // disable any-event mouse tracking
+        "\x1b[?1002l", // disable button-event mouse tracking
+        "\x1b[?1000l", // disable normal mouse tracking
+        "\x1b[?2004l", // disable bracketed paste
+    ));
 }
 
 /// Run a connection function in a loop, prompting to reconnect on failure.
