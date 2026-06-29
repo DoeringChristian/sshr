@@ -6,7 +6,7 @@ use crate::session;
 use crate::ssh::SshContext;
 use crate::vlog;
 
-fn wal_path() -> PathBuf {
+pub fn wal_path() -> PathBuf {
     data_dir().join("sshr").join("close.wal")
 }
 

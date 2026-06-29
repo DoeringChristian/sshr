@@ -182,7 +182,7 @@ fn cmd_connect(
         remote_cwd.as_deref(),
     );
 
-    signal::install_handlers();
+    signal::install_handlers(host, &session_name);
 
     eprintln!(
         "Connecting to {} (session: {})...",
