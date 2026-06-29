@@ -21,7 +21,7 @@ where
         let status = connect()?;
         reset_terminal();
 
-        if status.success() {
+        if status.success() || crate::signal::is_closing() {
             break;
         }
 

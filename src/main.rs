@@ -3,9 +3,11 @@ mod config;
 mod copy;
 mod reconnect;
 mod session;
+mod signal;
 mod ssh;
 mod upload;
 mod verbose;
+mod wal;
 
 use anyhow::Result;
 use base64::Engine;
@@ -102,9 +104,6 @@ fn ensure_remote_shpool(
 
 fn cmd_list(host: &str, all: bool) -> Result<()> {
     let ssh = SshContext::new()?;
-    let default_cfg = HostConfig::default();
-    ensure_remote_shpool(&ssh, host, &[], false, &default_cfg)?;
-
     let sessions = session::list_sessions(&ssh, host, &[])?;
     let prefix = session::local_prefix();
     let filtered: Vec<&session::SessionEntry> = sessions
@@ -124,9 +123,6 @@ fn cmd_list(host: &str, all: bool) -> Result<()> {
 
 fn cmd_kill(host: &str, sessions: &[String], all: bool) -> Result<()> {
     let ssh = SshContext::new()?;
-    let default_cfg = HostConfig::default();
-    ensure_remote_shpool(&ssh, host, &[], false, &default_cfg)?;
-
     let to_kill = if sessions.is_empty() {
         session::pick_sessions_to_kill(&ssh, host, all)?
     } else {
@@ -138,8 +134,6 @@ fn cmd_kill(host: &str, sessions: &[String], all: bool) -> Result<()> {
 
 fn cmd_clean(host: &str, all: bool) -> Result<()> {
     let ssh = SshContext::new()?;
-    let default_cfg = HostConfig::default();
-    ensure_remote_shpool(&ssh, host, &[], false, &default_cfg)?;
     session::clean_detached(&ssh, host, all)
 }
 
@@ -165,6 +159,8 @@ fn cmd_connect(
 
     ensure_remote_shpool(&ssh, host, ssh_args, cli.force_upload, &host_cfg)?;
 
+    wal::replay(&ssh, host);
+
     if !host_cfg.copy.is_empty() {
         copy::run_copy_directives(&ssh, host, ssh_args, &host_cfg.copy)?;
     }
@@ -186,6 +182,8 @@ fn cmd_connect(
         remote_cwd.as_deref(),
     );
 
+    signal::install_handlers();
+
     eprintln!(
         "Connecting to {} (session: {})...",
         host.cyan().bold(),
@@ -195,6 +193,8 @@ fn cmd_connect(
     let result = reconnect::run_with_reconnect(|| {
         ssh.run_interactive(host, ssh_args, Some(&remote_cmd))
     });
+
+    wal::record_close(&ssh, host, &session_name);
 
     set_user_var("sshr_host", "");
     set_user_var("sshr_session", "");

@@ -56,14 +56,13 @@ pub fn new_session_name(
     let prefix = local_prefix();
     let sessions = list_sessions(ssh, host, extra_args)?;
     let existing: HashSet<&str> = sessions.iter().map(|s| s.name.as_str()).collect();
-    let mut i = 0;
     loop {
-        let name = format!("{prefix}-s{i}");
+        let id: u32 = rand::random();
+        let name = format!("{prefix}-{:06x}", id & 0xFFFFFF);
         if !existing.contains(name.as_str()) {
             vlog!("session: new = {name}");
             return Ok(name);
         }
-        i += 1;
     }
 }
 
