@@ -34,8 +34,8 @@ export PATH="$PWD/sshr/bin:$PATH"
 # Connect to a host (creates a new shpool session)
 sshr myhost
 
-# Attach to an existing session
-sshr attach myhost
+# Attach to an existing session (interactive picker)
+sshr myhost attach
 
 # Start in a specific directory
 sshr --remote-cwd ~/projects myhost
@@ -44,14 +44,26 @@ sshr --remote-cwd ~/projects myhost
 sshr --shell /bin/zsh myhost
 
 # List remote sessions
-sshr list myhost
+sshr myhost list        # or: sshr myhost ls
 
-# Kill specific sessions
-sshr kill myhost s0 s1
+# Kill sessions (interactive picker, or by name)
+sshr myhost kill
+sshr myhost kill macbook-a3f21b macbook-c7e049
 
 # Kill all detached sessions
-sshr clean myhost
+sshr myhost clean
+
+# Show sessions from all clients, not just this machine
+sshr -a myhost list
+
+# Force re-upload of shpool binary
+sshr --force-upload myhost
+
+# Verbose logging (SSH commands, paths)
+sshr -v myhost
 ```
+
+The general form is `sshr [flags] <host> [subcommand] [args...]`. Session names are randomly generated (e.g. `macbook-a3f21b`). When `kill` or `attach` is run without session names, an interactive picker is shown.
 
 ## Shell Support
 
@@ -63,6 +75,14 @@ sshr deploys lightweight init files to the remote (`~/.local/share/sshr/init/`) 
 - **other** — launched directly (no OSC 7 injection)
 
 By default sshr uses the remote's login shell. Use `--shell` to override, or set a default in the config file.
+
+## Connection Management
+
+sshr uses SSH `ControlMaster=auto` with `ControlPersist=10m` to multiplex all sessions to a host through a single TCP connection. Multiple sshr windows share one master; when the last one exits, the master lingers for 10 minutes before shutting down.
+
+**Reconnection**: when an SSH connection drops (exit code 255), sshr tears down the broken master, cleans up stale sockets, and immediately retries. If the retry also fails, it prompts you to press any key to try again. Non-SSH failures (e.g. a shpool crash) prompt without touching the master, since another session may be using it.
+
+**Session cleanup**: when sshr exits (normally or via SIGHUP/SIGTERM), it records the session in a write-ahead log and kills it on the remote. If the connection is already down, pending kills are replayed on the next connect to that host.
 
 ## Configuration
 
@@ -110,7 +130,7 @@ EDITOR = "vim"
 TERM_PROGRAM = "_kitty_copy_env_var_"  # copies value from local env
 ```
 
-Variables are expanded recursively: `"${HOME}/${VAR1}/b"`.
+Values are exported in the remote shell, so shell variables like `$PATH` and `$HOME` are expanded on the remote side. The special value `_kitty_copy_env_var_` copies the variable's value from your local environment.
 
 ### `copy`
 
@@ -157,7 +177,7 @@ map kitty_mod+x kitten smart_close.py
 
 **smart_launch** (`cmd+enter`) is context-aware: in an sshr window it opens a new sshr session to the same host in the same directory; in a local window it opens a local shell in the current directory.
 
-**smart_close** (`cmd+x`) kills the remote shpool session when closing an sshr window.
+**smart_close** (`cmd+x`) closes the window. For sshr sessions, the closing signal triggers sshr's cleanup handler, which records the session in a write-ahead log and kills it on the remote (or on next connect if the connection is already down).
 
 ## Pre-built shpool Binaries
 
