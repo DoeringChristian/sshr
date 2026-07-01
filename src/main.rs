@@ -157,6 +157,8 @@ fn cmd_connect(
 
     set_user_var("sshr_host", host);
 
+    ssh.clean_stale_master(host, ssh_args);
+
     ensure_remote_shpool(&ssh, host, ssh_args, cli.force_upload, &host_cfg)?;
 
     wal::replay(&ssh, host);
@@ -190,9 +192,13 @@ fn cmd_connect(
         session_name.green().bold()
     );
 
-    let result = reconnect::run_with_reconnect(|| {
-        ssh.run_interactive(host, ssh_args, Some(&remote_cmd))
-    });
+    let result = reconnect::run_with_reconnect(
+        || {
+            ssh.clean_stale_master(host, ssh_args);
+            ssh.run_interactive(host, ssh_args, Some(&remote_cmd))
+        },
+        || ssh.drop_control_master(host, ssh_args),
+    );
 
     wal::record_close(&ssh, host, &session_name);
 

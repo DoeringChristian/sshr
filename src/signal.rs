@@ -59,3 +59,9 @@ pub fn install_handlers(host: &str, session_name: &str) {
 pub fn is_closing() -> bool {
     CLOSING.load(Ordering::SeqCst)
 }
+
+#[cfg(test)]
+#[allow(dead_code)]
+pub fn set_closing(val: bool) {
+    CLOSING.store(val, Ordering::SeqCst);
+}
