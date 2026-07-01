@@ -47,19 +47,22 @@ impl SshContext {
         ]
     }
 
-    /// Pre-flight check: if the control master is dead but its socket lingers,
-    /// remove the stale socket so the next connection can create a fresh master.
-    pub fn clean_stale_master(&self, host: &str, extra_args: &[String]) {
-        let check = Command::new(&self.ssh_cmd)
-            .args(["-O", "check"])
+    fn control_cmd(&self, op: &str, host: &str, extra_args: &[String]) -> Command {
+        let mut cmd = Command::new(&self.ssh_cmd);
+        cmd.args(["-O", op])
             .arg("-o")
             .arg(format!("ControlPath={}", self.control_path))
             .arg(host)
             .args(extra_args)
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
+            .stderr(Stdio::null());
+        cmd
+    }
 
+    /// Pre-flight check: if the control master is dead but its socket lingers,
+    /// remove the stale socket so the next connection can create a fresh master.
+    pub fn clean_stale_master(&self, host: &str, extra_args: &[String]) {
+        let check = self.control_cmd("check", host, extra_args).status();
         if !matches!(check, Ok(s) if s.success()) {
             self.remove_stale_sockets(host);
         }
@@ -123,15 +126,7 @@ impl SshContext {
         use std::thread;
 
         vlog!("ssh: tearing down control master");
-        let child = Command::new(&self.ssh_cmd)
-            .args(["-O", "exit"])
-            .arg("-o")
-            .arg(format!("ControlPath={}", self.control_path))
-            .arg(host)
-            .args(extra_args)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn();
+        let child = self.control_cmd("exit", host, extra_args).spawn();
 
         if let Ok(mut child) = child {
             let deadline = Instant::now() + Duration::from_secs(5);
@@ -206,6 +201,10 @@ fn home_dir() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static TEST_ID: AtomicUsize = AtomicUsize::new(0);
+
     struct MockSsh {
         dir: PathBuf,
         script_path: PathBuf,
@@ -213,9 +212,11 @@ mod tests {
 
     impl MockSsh {
         fn new(behavior: &str) -> Self {
-            let dir = std::env::temp_dir().join(format!("sshr-test-{}", std::process::id()))
-                .join(format!("{:x}", std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH).unwrap().subsec_nanos()));
+            let dir = std::env::temp_dir().join(format!(
+                "sshr-test-{}-{}",
+                std::process::id(),
+                TEST_ID.fetch_add(1, Ordering::Relaxed),
+            ));
             fs::create_dir_all(&dir).unwrap();
 
             let script_path = dir.join("mock_ssh");
@@ -253,7 +254,6 @@ mod tests {
                 vec![]
             }
         }
-
     }
 
     impl Drop for MockSsh {
@@ -265,6 +265,24 @@ mod tests {
     fn make_ctx(mock: &MockSsh) -> SshContext {
         let ctl_dir = mock.dir.join("ctl");
         SshContext::with_mock(mock.path(), ctl_dir.to_str().unwrap())
+    }
+
+    fn counting_script(mock: &MockSsh, fail_count: u32) {
+        let script = format!(
+            "#!/bin/sh\n\
+             MOCK_DIR=\"{dir}\"\n\
+             echo \"$@\" >> \"{dir}/calls.log\"\n\
+             for arg in \"$@\"; do\n\
+               if [ \"$arg\" = \"exit\" ] || [ \"$arg\" = \"check\" ]; then exit 0; fi\n\
+             done\n\
+             COUNTER=$(cat \"$MOCK_DIR/counter\" 2>/dev/null || echo 0)\n\
+             COUNTER=$((COUNTER + 1))\n\
+             echo $COUNTER > \"$MOCK_DIR/counter\"\n\
+             if [ \"$COUNTER\" -le {fail_count} ]; then exit 255; fi\n\
+             exit 0",
+            dir = mock.dir.display()
+        );
+        fs::write(&mock.script_path, script).unwrap();
     }
 
     // ---- drop_control_master ----
@@ -360,23 +378,8 @@ mod tests {
 
     #[test]
     fn full_scenario_stale_master_then_recovery() {
-        // -O exit/check succeed; first interactive exits 255, second exits 0
         let mock = MockSsh::new("");
-        let script = format!(
-            "#!/bin/sh\n\
-             MOCK_DIR=\"{dir}\"\n\
-             echo \"$@\" >> \"{dir}/calls.log\"\n\
-             for arg in \"$@\"; do\n\
-               if [ \"$arg\" = \"exit\" ] || [ \"$arg\" = \"check\" ]; then exit 0; fi\n\
-             done\n\
-             COUNTER=$(cat \"$MOCK_DIR/counter\" 2>/dev/null || echo 0)\n\
-             COUNTER=$((COUNTER + 1))\n\
-             echo $COUNTER > \"$MOCK_DIR/counter\"\n\
-             if [ \"$COUNTER\" -le 1 ]; then exit 255; fi\n\
-             exit 0",
-            dir = mock.dir.display()
-        );
-        fs::write(&mock.script_path, script).unwrap();
+        counting_script(&mock, 1);
 
         let ctx = make_ctx(&mock);
         let master_killed = std::sync::atomic::AtomicBool::new(false);
@@ -417,21 +420,7 @@ mod tests {
     #[test]
     fn full_scenario_network_down_then_recovery() {
         let mock = MockSsh::new("");
-        let script = format!(
-            "#!/bin/sh\n\
-             MOCK_DIR=\"{dir}\"\n\
-             echo \"$@\" >> \"{dir}/calls.log\"\n\
-             for arg in \"$@\"; do\n\
-               if [ \"$arg\" = \"exit\" ] || [ \"$arg\" = \"check\" ]; then exit 0; fi\n\
-             done\n\
-             COUNTER=$(cat \"$MOCK_DIR/counter\" 2>/dev/null || echo 0)\n\
-             COUNTER=$((COUNTER + 1))\n\
-             echo $COUNTER > \"$MOCK_DIR/counter\"\n\
-             if [ \"$COUNTER\" -le 4 ]; then exit 255; fi\n\
-             exit 0",
-            dir = mock.dir.display()
-        );
-        fs::write(&mock.script_path, script).unwrap();
+        counting_script(&mock, 4);
 
         let ctx = make_ctx(&mock);
         let error_count = std::sync::atomic::AtomicUsize::new(0);

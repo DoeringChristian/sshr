@@ -193,10 +193,7 @@ fn cmd_connect(
     );
 
     let result = reconnect::run_with_reconnect(
-        || {
-            ssh.clean_stale_master(host, ssh_args);
-            ssh.run_interactive(host, ssh_args, Some(&remote_cmd))
-        },
+        || ssh.run_interactive(host, ssh_args, Some(&remote_cmd)),
         || ssh.drop_control_master(host, ssh_args),
     );
 
