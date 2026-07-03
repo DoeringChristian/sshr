@@ -13,6 +13,7 @@ fn reset_terminal() {
     eprint!(concat!(
         "\x1b[?1049l", // exit alternate screen
         "\x1b[?1006l", // disable SGR mouse mode
+        "\x1b[?1004l", // disable focus reporting
         "\x1b[?1003l", // disable any-event mouse tracking
         "\x1b[?1002l", // disable button-event mouse tracking
         "\x1b[?1000l", // disable normal mouse tracking

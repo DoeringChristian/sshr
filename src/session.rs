@@ -8,11 +8,27 @@ use crate::upload::{REMOTE_SHPOOL_PATH, REMOTE_SOCKET_PATH};
 use crate::vlog;
 
 pub fn local_prefix() -> String {
-    let full = hostname::get()
-        .map(|h| h.to_string_lossy().to_string())
-        .unwrap_or_else(|_| "unknown".into());
+    let full = stable_hostname();
     let short = full.split('.').next().unwrap_or(&full);
     short.to_lowercase().replace(' ', "-")
+}
+
+fn stable_hostname() -> String {
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(output) = std::process::Command::new("scutil")
+            .args(["--get", "LocalHostName"])
+            .output()
+        {
+            let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !name.is_empty() {
+                return name;
+            }
+        }
+    }
+    hostname::get()
+        .map(|h| h.to_string_lossy().to_string())
+        .unwrap_or_else(|_| "unknown".into())
 }
 
 #[derive(Debug, Clone)]
