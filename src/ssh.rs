@@ -132,6 +132,8 @@ impl SshContext {
         local: &std::path::Path,
         remote: &str,
     ) -> Result<()> {
+        // SFTP-based scp (OpenSSH 9.0+) doesn't expand ~; use relative path
+        let remote = remote.strip_prefix("~/").unwrap_or(remote);
         let mut cmd = Command::new("scp");
         cmd.arg("-o")
             .arg(format!("ControlPath={}", self.control_path))
