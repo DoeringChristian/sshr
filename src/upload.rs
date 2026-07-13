@@ -145,10 +145,20 @@ fn ensure_init_files(
         r#"mkdir -p {REMOTE_INIT_DIR}/zsh {REMOTE_INIT_DIR}/fish/vendor_conf.d
 cat > {REMOTE_INIT_DIR}/launch.sh << 'SSHR_EOF'
 #!/bin/sh
+# Re-exec through a login shell to inherit the full environment
+# (PATH from nix, homebrew, mise, etc.) — same as a normal SSH session.
+if [ -z "$_SSHR_LOGIN" ]; then
+    export _SSHR_LOGIN=1
+    exec /bin/sh -l "$0" "$@"
+fi
 export SSH_CONNECTION="${{SSH_CONNECTION:-sshr}}"
 {env_section}login_shell="${{1:-$SHELL}}"
 if [ "${{login_shell#/}}" = "$login_shell" ]; then
     login_shell=$(command -v "$login_shell" 2>/dev/null || echo "$login_shell")
+fi
+if ! command -v "$login_shell" >/dev/null 2>&1; then
+    echo "sshr: shell '$login_shell' not found, falling back to $SHELL" >&2
+    login_shell="$SHELL"
 fi
 shell_name=$(basename "$login_shell")
 init_dir="$HOME/.local/share/sshr/init"

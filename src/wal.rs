@@ -83,13 +83,14 @@ pub fn replay(ssh: &SshContext, host: &str) {
     }
 
     let names: Vec<String> = pending.iter().map(|e| e.session.clone()).collect();
-    vlog!("wal: replaying {} pending close(s) for {host}: {}", names.len(), names.join(", "));
+    vlog!(
+        "wal: replaying {} pending close(s) for {host}: {}",
+        names.len(),
+        names.join(", ")
+    );
 
     if session::kill_sessions(ssh, host, &names).is_ok() {
-        let remaining: Vec<WalEntry> = entries
-            .into_iter()
-            .filter(|e| e.host != host)
-            .collect();
+        let remaining: Vec<WalEntry> = entries.into_iter().filter(|e| e.host != host).collect();
         let _ = write_entries(&remaining);
         vlog!("wal: flushed entries for {host}");
     }

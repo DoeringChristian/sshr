@@ -79,6 +79,8 @@ impl SshContext {
     }
 
     /// Run SSH interactively with inherited stdio.
+    /// After spawning, nudges the terminal size to force a SIGWINCH through
+    /// the SSH → shpool → child chain, so TUI apps redraw correctly on reconnect.
     pub fn run_interactive(
         &self,
         host: &str,
@@ -97,7 +99,9 @@ impl SshContext {
         cmd.stdin(Stdio::inherit())
             .stdout(Stdio::inherit())
             .stderr(Stdio::inherit());
-        cmd.status().context("failed to execute ssh")
+        let mut child = cmd.spawn().context("failed to execute ssh")?;
+        nudge_terminal_size();
+        child.wait().context("failed to wait for ssh")
     }
 
     /// Run SSH and capture stdout, suppressing stderr.
@@ -118,33 +122,6 @@ impl SshContext {
             .output()
             .context("failed to execute ssh")?;
         Ok(String::from_utf8_lossy(&output.stdout).to_string())
-    }
-
-    /// Tear down control master and clean up socket files.
-    pub fn drop_control_master(&self, host: &str, extra_args: &[String]) {
-        use std::time::{Duration, Instant};
-        use std::thread;
-
-        vlog!("ssh: tearing down control master");
-        let child = self.control_cmd("exit", host, extra_args).spawn();
-
-        if let Ok(mut child) = child {
-            let deadline = Instant::now() + Duration::from_secs(5);
-            loop {
-                match child.try_wait() {
-                    Ok(Some(_)) => break,
-                    Ok(None) if Instant::now() >= deadline => {
-                        vlog!("ssh: -O exit timed out, killing");
-                        let _ = child.kill();
-                        let _ = child.wait();
-                        break;
-                    }
-                    Ok(None) => thread::sleep(Duration::from_millis(50)),
-                    Err(_) => break,
-                }
-            }
-        }
-        self.remove_stale_sockets(host);
     }
 
     /// Upload a file via SCP using the same control socket.
@@ -186,6 +163,25 @@ fn translate_for_scp(args: &[String]) -> Vec<String> {
         i += 1;
     }
     out
+}
+
+/// Briefly shrink the terminal by one row and restore it, causing a SIGWINCH
+/// to propagate through SSH → shpool → child. This forces TUI apps to redraw
+/// after a reconnect. Spawned on a background thread with a short delay so the
+/// SSH connection has time to establish.
+fn nudge_terminal_size() {
+    std::thread::spawn(|| {
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        unsafe {
+            let mut ws: libc::winsize = std::mem::zeroed();
+            if libc::ioctl(libc::STDOUT_FILENO, libc::TIOCGWINSZ, &mut ws) == 0 && ws.ws_row > 1 {
+                ws.ws_row -= 1;
+                libc::ioctl(libc::STDOUT_FILENO, libc::TIOCSWINSZ, &ws);
+                ws.ws_row += 1;
+                libc::ioctl(libc::STDOUT_FILENO, libc::TIOCSWINSZ, &ws);
+            }
+        }
+    });
 }
 
 fn dirs() -> PathBuf {
@@ -285,60 +281,50 @@ mod tests {
         fs::write(&mock.script_path, script).unwrap();
     }
 
-    // ---- drop_control_master ----
+    // ---- clean_stale_master ----
 
     #[test]
-    fn drop_control_master_sends_exit_command() {
+    fn clean_stale_master_sends_check_command() {
         let mock = MockSsh::new("exit 0");
         let ctx = make_ctx(&mock);
 
-        ctx.drop_control_master("fermat", &[]);
+        ctx.clean_stale_master("fermat", &[]);
 
         let calls = mock.calls();
         assert_eq!(calls.len(), 1);
-        assert!(calls[0].contains("-O exit"), "should send -O exit, got: {}", calls[0]);
-        assert!(calls[0].contains("fermat"), "should target correct host");
-        assert!(calls[0].contains("ControlPath="));
+        assert!(
+            calls[0].contains("-O check"),
+            "should send -O check, got: {}",
+            calls[0]
+        );
+        assert!(calls[0].contains("fermat"));
     }
 
     #[test]
-    fn drop_control_master_passes_extra_args() {
-        let mock = MockSsh::new("exit 0");
-        let ctx = make_ctx(&mock);
-        let args = vec!["-p".into(), "2222".into()];
-
-        ctx.drop_control_master("server", &args);
-
-        let calls = mock.calls();
-        assert_eq!(calls.len(), 1);
-        assert!(calls[0].contains("-p 2222"), "extra args missing: {}", calls[0]);
-        assert!(calls[0].contains("server"));
-    }
-
-    #[test]
-    fn drop_control_master_tolerates_ssh_failure() {
-        let mock = MockSsh::new("exit 1");
+    fn clean_stale_master_removes_socket_when_dead() {
+        let mock = MockSsh::new("exit 1"); // check fails = master dead
         let ctx = make_ctx(&mock);
 
-        ctx.drop_control_master("host", &[]);
-        assert_eq!(mock.calls().len(), 1);
-    }
-
-    // ---- drop_control_master cleans stale sockets ----
-
-    #[test]
-    fn drop_control_master_removes_stale_socket_files() {
-        let mock = MockSsh::new("exit 0");
-        let ctx = make_ctx(&mock);
-
-        // Create a fake stale socket file
         let stale = ctx.control_dir.join("user@fermat:22");
         fs::write(&stale, "").unwrap();
         assert!(stale.exists());
 
-        ctx.drop_control_master("fermat", &[]);
+        ctx.clean_stale_master("fermat", &[]);
 
-        assert!(!stale.exists(), "stale socket should be removed");
+        assert!(!stale.exists(), "stale socket should be removed when master is dead");
+    }
+
+    #[test]
+    fn clean_stale_master_keeps_socket_when_alive() {
+        let mock = MockSsh::new("exit 0"); // check succeeds = master alive
+        let ctx = make_ctx(&mock);
+
+        let socket = ctx.control_dir.join("user@fermat:22");
+        fs::write(&socket, "").unwrap();
+
+        ctx.clean_stale_master("fermat", &[]);
+
+        assert!(socket.exists(), "socket must not be removed when master is alive");
     }
 
     // ---- run_interactive ----
@@ -357,7 +343,8 @@ mod tests {
         let mock = MockSsh::new("exit 0");
         let ctx = make_ctx(&mock);
 
-        ctx.run_interactive("host", &[], Some("shpool attach foo")).unwrap();
+        ctx.run_interactive("host", &[], Some("shpool attach foo"))
+            .unwrap();
 
         let calls = mock.calls();
         assert!(calls[0].contains("-t"), "should add -t for remote command");
@@ -382,21 +369,24 @@ mod tests {
         counting_script(&mock, 1);
 
         let ctx = make_ctx(&mock);
-        let master_killed = std::sync::atomic::AtomicBool::new(false);
+        let error_fired = std::sync::atomic::AtomicBool::new(false);
 
         let result = crate::reconnect::run_reconnect_loop(
             || ctx.run_interactive("fermat", &[], Some("shpool attach s1")),
             || {
-                ctx.drop_control_master("fermat", &[]);
-                master_killed.store(true, std::sync::atomic::Ordering::SeqCst);
+                ctx.clean_stale_master("fermat", &[]);
+                error_fired.store(true, std::sync::atomic::Ordering::SeqCst);
             },
             || panic!("immediate retry should succeed without prompting"),
             || false,
         );
 
         assert!(result.is_ok());
-        assert!(master_killed.load(std::sync::atomic::Ordering::SeqCst));
-        assert!(mock.calls().iter().any(|c| c.contains("-O exit")), "master should be killed");
+        assert!(error_fired.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(
+            mock.calls().iter().any(|c| c.contains("-O check")),
+            "should check master health"
+        );
     }
 
     #[test]
@@ -407,14 +397,18 @@ mod tests {
 
         let result = crate::reconnect::run_reconnect_loop(
             || ctx.run_interactive("fermat", &[], Some("shpool attach s1")),
-            || { master_killed.store(true, std::sync::atomic::Ordering::SeqCst); },
+            || {
+                master_killed.store(true, std::sync::atomic::Ordering::SeqCst);
+            },
             || panic!("should not wait"),
             || false,
         );
 
         assert!(result.is_ok());
-        assert!(!master_killed.load(std::sync::atomic::Ordering::SeqCst),
-            "must not kill a healthy master from another session");
+        assert!(
+            !master_killed.load(std::sync::atomic::Ordering::SeqCst),
+            "must not kill a healthy master from another session"
+        );
     }
 
     #[test]
@@ -429,7 +423,7 @@ mod tests {
         let result = crate::reconnect::run_reconnect_loop(
             || ctx.run_interactive("fermat", &[], None),
             || {
-                ctx.drop_control_master("fermat", &[]);
+                ctx.clean_stale_master("fermat", &[]);
                 error_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             },
             || {
@@ -440,9 +434,13 @@ mod tests {
         );
 
         assert!(result.is_ok());
-        assert!(error_count.load(std::sync::atomic::Ordering::SeqCst) >= 2,
-            "should kill master on each 255 cycle");
-        assert!(wait_count.load(std::sync::atomic::Ordering::SeqCst) >= 1,
-            "should prompt user when retry also fails");
+        assert!(
+            error_count.load(std::sync::atomic::Ordering::SeqCst) >= 2,
+            "should clean stale sockets on each 255 cycle"
+        );
+        assert!(
+            wait_count.load(std::sync::atomic::Ordering::SeqCst) >= 1,
+            "should prompt user when retry also fails"
+        );
     }
 }
