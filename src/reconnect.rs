@@ -46,7 +46,7 @@ where
     C: Fn() -> bool,
 {
     loop {
-        let status = connect()?;
+        let mut status = connect()?;
         reset_terminal();
 
         if status.success() || is_closing() {
@@ -55,17 +55,24 @@ where
 
         if status.code() == Some(255) {
             on_ssh_error();
-            let retry = connect()?;
+            status = connect()?;
             reset_terminal();
-            if retry.success() || is_closing() {
+            if status.success() || is_closing() {
                 break;
             }
         }
 
+        // 255 is SSH's own exit code; anything else came from the remote
+        // command, meaning the connection itself is fine.
+        let reason = match status.code() {
+            Some(255) => "Connection lost.".to_string(),
+            Some(code) => format!("Remote command failed (exit {code})."),
+            None => "Connection killed by signal.".to_string(),
+        };
         eprintln!();
         eprintln!(
             "{}",
-            "Connection lost. Press any key to reconnect (Ctrl-C to quit)..."
+            format!("{reason} Press any key to reconnect (Ctrl-C to quit)...")
                 .yellow()
                 .bold()
         );

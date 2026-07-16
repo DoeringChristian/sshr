@@ -44,6 +44,14 @@ impl SshContext {
             format!("ControlPath={}", self.control_path),
             "-o".into(),
             "ControlPersist=10m".into(),
+            // Without keepalives, a black-holed connection (VPN re-route,
+            // network switch) stays ESTABLISHED forever: ssh never exits, so
+            // the reconnect loop never runs and the session freezes for good.
+            // Detect a dead link within ~30s and exit so reconnect can kick in.
+            "-o".into(),
+            "ServerAliveInterval=10".into(),
+            "-o".into(),
+            "ServerAliveCountMax=3".into(),
         ]
     }
 
@@ -338,6 +346,21 @@ mod tests {
 
         let status = ctx.run_interactive("host", &[], None).unwrap();
         assert_eq!(status.code(), Some(42));
+    }
+
+    #[test]
+    fn run_interactive_sets_keepalive_options() {
+        let mock = MockSsh::new("exit 0");
+        let ctx = make_ctx(&mock);
+
+        ctx.run_interactive("host", &[], None).unwrap();
+
+        let call = &mock.calls()[0];
+        assert!(
+            call.contains("ServerAliveInterval="),
+            "keepalives must be set or a black-holed connection hangs forever: {call}"
+        );
+        assert!(call.contains("ServerAliveCountMax="));
     }
 
     #[test]
