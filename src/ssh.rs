@@ -126,9 +126,24 @@ impl SshContext {
             .arg(remote_cmd);
         vlog!("exec: {cmd:?}");
         let output = cmd
-            .stderr(Stdio::null())
+            .stderr(Stdio::piped())
             .output()
             .context("failed to execute ssh")?;
+        // ssh reserves exit 255 for its own failures (connection, auth, ...).
+        // Other exit codes come from the remote command and are the caller's
+        // concern; without this check a connection failure looks like empty
+        // command output and produces misleading downstream errors.
+        if output.status.code() == Some(255) {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let detail = stderr
+                .lines()
+                .rev()
+                .find(|l| !l.trim().is_empty())
+                .unwrap_or("ssh exited with 255")
+                .trim()
+                .to_string();
+            anyhow::bail!("cannot connect to {host}: {detail}");
+        }
         Ok(String::from_utf8_lossy(&output.stdout).to_string())
     }
 
@@ -335,6 +350,32 @@ mod tests {
         ctx.clean_stale_master("fermat", &[]);
 
         assert!(socket.exists(), "socket must not be removed when master is alive");
+    }
+
+    // ---- run_capture ----
+
+    #[test]
+    fn run_capture_reports_connection_failure() {
+        let mock = MockSsh::new(
+            "echo 'ssh: connect to host fermat port 22: No route to host' >&2\nexit 255",
+        );
+        let ctx = make_ctx(&mock);
+
+        let err = ctx.run_capture("fermat", &[], "uname -sm").unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("cannot connect to fermat"), "got: {msg}");
+        assert!(msg.contains("No route to host"), "got: {msg}");
+    }
+
+    #[test]
+    fn run_capture_tolerates_remote_command_failure() {
+        // e.g. `shpool list` before the daemon is up exits non-zero;
+        // only ssh's own 255 is a hard error.
+        let mock = MockSsh::new("echo partial-output\nexit 1");
+        let ctx = make_ctx(&mock);
+
+        let out = ctx.run_capture("fermat", &[], "shpool list").unwrap();
+        assert_eq!(out.trim(), "partial-output");
     }
 
     // ---- run_interactive ----
